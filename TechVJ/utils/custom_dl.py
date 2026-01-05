@@ -2,7 +2,6 @@
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-
 import math
 import asyncio
 import logging
@@ -10,12 +9,59 @@ from config import LOG_CHANNEL
 from typing import Dict, Union
 from TechVJ.bot import work_loads
 from pyrogram import Client, utils, raw
-from .file_properties import get_file_ids
 from pyrogram.session import Session, Auth
 from pyrogram.errors import AuthBytesInvalid
-from TechVJ.server.exceptions import FIleNotFound
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 
+# LOCAL FILE NOT FOUND EXCEPTION - Replace the problematic import
+class FIleNotFound(Exception):
+    """Custom File Not Found exception"""
+    pass
+
+# LOCAL FUNCTION TO GET FILE PROPERTIES - Avoids circular import
+def get_media_from_message(message):
+    """Get media from message without importing from file_properties"""
+    media_types = (
+        "audio",
+        "document", 
+        "photo",
+        "sticker",
+        "animation",
+        "video",
+        "voice",
+        "video_note",
+    )
+    for attr in media_types:
+        media = getattr(message, attr, None)
+        if media:
+            return media
+    return None
+
+async def get_file_ids_simple(client: Client, chat_id: int, message_id: int) -> FileId:
+    """
+    Simple version of get_file_ids that doesn't cause circular imports
+    """
+    try:
+        message = await client.get_messages(chat_id, message_id)
+        if message.empty:
+            raise FIleNotFound("Message is empty or not found")
+        
+        media = get_media_from_message(message)
+        if not media:
+            raise FIleNotFound("No media found in message")
+        
+        file_unique_id = getattr(media, "file_unique_id", "")
+        file_id_obj = FileId.decode(media.file_id)
+        
+        # Set additional attributes
+        setattr(file_id_obj, "file_size", getattr(media, "file_size", 0))
+        setattr(file_id_obj, "mime_type", getattr(media, "mime_type", ""))
+        setattr(file_id_obj, "file_name", getattr(media, "file_name", ""))
+        setattr(file_id_obj, "unique_id", file_unique_id)
+        
+        return file_id_obj
+    except Exception as e:
+        raise FIleNotFound(f"Failed to get file ids: {str(e)}")
 
 class ByteStreamer:
     def __init__(self, client: Client):
@@ -54,21 +100,27 @@ class ByteStreamer:
         Generates the properties of a media file on a specific message.
         returns ths properties in a FIleId class.
         """
-        file_id = await get_file_ids(self.client, LOG_CHANNEL, id)
+        # Use the local function instead of importing from file_properties
+        file_id = await get_file_ids_simple(self.client, LOG_CHANNEL, id)
+        
         logging.debug(f"Generated file ID and Unique ID for message with ID {id}")
+        
         if not file_id:
             logging.debug(f"Message with ID {id} not found")
             raise FIleNotFound
+        
         self.cached_file_ids[id] = file_id
         logging.debug(f"Cached media message with ID {id}")
+        
         return self.cached_file_ids[id]
 
-    async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
+    async def generate_media_session(self, file_id: FileId) -> Session:
         """
         Generates the media session for the DC that contains the media file.
         This is required for getting the bytes from Telegram servers.
         """
-
+        client = self.client
+        
         media_session = client.media_sessions.get(file_id.dc_id, None)
 
         if media_session is None:
@@ -113,12 +165,13 @@ class ByteStreamer:
                     is_media=True,
                 )
                 await media_session.start()
+            
             logging.debug(f"Created media session for DC {file_id.dc_id}")
             client.media_sessions[file_id.dc_id] = media_session
         else:
             logging.debug(f"Using cached media session for DC {file_id.dc_id}")
+        
         return media_session
-
 
     @staticmethod
     async def get_location(file_id: FileId) -> Union[raw.types.InputPhotoFileLocation,
@@ -183,8 +236,8 @@ class ByteStreamer:
         client = self.client
         work_loads[index] += 1
         logging.debug(f"Starting to yielding file with client {index}.")
-        media_session = await self.generate_media_session(client, file_id)
-
+        
+        media_session = await self.generate_media_session(file_id)
         current_part = 1
         location = await self.get_location(file_id)
 
@@ -194,6 +247,7 @@ class ByteStreamer:
                     location=location, offset=offset, limit=chunk_size
                 ),
             )
+            
             if isinstance(r, raw.types.upload.File):
                 while True:
                     chunk = r.bytes
@@ -219,13 +273,15 @@ class ByteStreamer:
                             location=location, offset=offset, limit=chunk_size
                         ),
                     )
+        
         except (TimeoutError, AttributeError):
+            logging.warning(f"Timeout or attribute error while yielding file")
             pass
+        
         finally:
-            logging.debug("Finished yielding file with {current_part} parts.")
+            logging.debug(f"Finished yielding file with {current_part} parts.")
             work_loads[index] -= 1
 
-    
     async def clean_cache(self) -> None:
         """
         function to clean the cache to reduce memory usage
