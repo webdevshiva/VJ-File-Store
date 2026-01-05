@@ -18,6 +18,7 @@ from plugins import (
     genlink,
     users_api,
     database,  # New
+    fsub,
     verification,  # New
     admin_panel  # New
 )
