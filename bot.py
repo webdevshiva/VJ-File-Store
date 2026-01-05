@@ -9,6 +9,26 @@ from pathlib import Path
 from pyrogram import idle
 import logging
 import logging.config
+# In bot.py, update the imports section
+from plugins import (
+    commands,
+    broadcast,
+    clone,
+    dbusers,
+    genlink,
+    users_api,
+    database,  # New
+    verification,  # New
+    admin_panel  # New
+)
+
+# Initialize database
+async def init_db():
+    from plugins.database import db
+    # Create indexes if needed
+    print("Database initialized with new features")
+
+# Call init_db in startup
 
 # Don't Remove Credit Tg - @VJ_Bots
 # Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
